@@ -116,9 +116,8 @@ split_segments(Path, Char, Acc) ->
 make_segment(Seg) ->
     list_to_binary(emqx_http_lib:uri_decode(Seg)).
 
-channel_apply(coap, ChId, Fun) ->
-    {ok, Sock} = er_coap_udp_socket:start_link(),
-    {ok, Channel} = er_coap_udp_socket:get_channel(Sock, ChId),
+channel_apply(coap, {Host, Port}, Fun) ->
+    {ok, Sock, Channel} = er_coap_udp_socket:connect(Host, Port),
     % send and receive
     Res = apply(Fun, [Channel]),
     % terminate the processes

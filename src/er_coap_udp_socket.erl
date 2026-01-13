@@ -8,45 +8,38 @@
 %
 
 % dispatcher for UDP communication
-% maintains a lookup-table for existing channels
-% when a channel pool is provided (server mode), creates new channels
 -module(er_coap_udp_socket).
 -behaviour(gen_server).
 
--export([start_link/0, get_channel/2, close/1]).
+-export([connect/2, connect/3, close/1, get_channel/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, code_change/3, terminate/2]).
 
--record(state, {sock, chans, pool}).
+-record(state, {sock, channel}).
 
-% client
-start_link() ->
-    gen_server:start_link(?MODULE, [0], []).
+connect(Host, Port) ->
+    connect(Host, Port, []).
 
-
-get_channel(Pid, {PeerIP, PeerPortNo}) ->
-    gen_server:call(Pid, {get_channel, {PeerIP, PeerPortNo}}).
+connect(Host, Port, ConnectOpts) ->
+    {ok, Socket} = gen_server:start_link(?MODULE, [connect, Host, Port, ConnectOpts], []),
+    {ok, Channel} = get_channel(Socket),
+    {ok, Socket, Channel}.
 
 close(Pid) ->
-    % the channels will be terminated by their supervisor (server), or
-    % should be terminated by the user (client)
     gen_server:cast(Pid, shutdown).
 
-
-init([InPort]) ->
-    {ok, Socket} = gen_udp:open(InPort, [binary, {active, true}, {reuseaddr, true}]),
-    %{ok, InPort2} = inet:port(Socket),
-    %error_logger:info_msg("coap listen on *:~p~n", [InPort2]),
-    {ok, #state{sock=Socket, chans=dict:new()}}.
+get_channel(Pid) ->
+    gen_server:call(Pid, get_channel).
 
 
-handle_call({get_channel, ChId}, _From, State=#state{chans=Chans}) ->
-    case find_channel(ChId, Chans) of
-        {ok, Pid} ->
-            {reply, {ok, Pid}, State};
-        undefined ->
-            {ok, Pid} = er_coap_channel:start_link(self(), ChId),
-            {reply, {ok, Pid}, store_channel(ChId, Pid, State)}
-    end;
+init([connect, Host, Port, ConnectOpts]) ->
+    {ok, Socket} = gen_udp:open(0, [binary, {active, true}, {reuseaddr, true} | ConnectOpts]),
+    ChId = {Host, Port},
+    {ok, Pid} = er_coap_channel:start_link(self(), ChId),
+    {ok, #state{sock=Socket, channel=Pid}}.
+
+
+handle_call(get_channel, _From, State=#state{channel=Chan}) ->
+    {reply, {ok, Chan}, State};
 handle_call(_Unknown, _From, State) ->
     {reply, unknown_call, State}.
 
@@ -56,35 +49,12 @@ handle_cast(Request, State) ->
     io:fwrite("coap_udp_socket unknown cast ~p~n", [Request]),
     {noreply, State}.
 
-handle_info({udp, _Socket, PeerIP, PeerPortNo, Data}, State=#state{chans=Chans, pool=PoolPid}) ->
-    ChId = {PeerIP, PeerPortNo},
-    case find_channel(ChId, Chans) of
-        % channel found in cache
-        {ok, Pid} ->
-            Pid ! {datagram, Data},
-            {noreply, State};
-        undefined when is_pid(PoolPid) ->
-            case er_coap_channel_sup_sup:start_channel(PoolPid, ChId) of
-                % new channel created
-                {ok, _, Pid} ->
-                    Pid ! {datagram, Data},
-                    {noreply, store_channel(ChId, Pid, State)};
-                % drop this packet
-                {error, _} ->
-                    {noreply, State}
-            end;
-        undefined ->
-            % ignore unexpected message received by a client
-            % TODO: do we want to send reset?
-            {noreply, State}
-    end;
+handle_info({udp, _Socket, _PeerIP, _PeerPortNo, Data}, State=#state{channel=Chan}) ->
+    Chan ! {datagram, Data},
+    {noreply, State};
 handle_info({datagram, {PeerIP, PeerPortNo}, Data}, State=#state{sock=Socket}) ->
     ok = gen_udp:send(Socket, PeerIP, PeerPortNo, Data),
     {noreply, State};
-handle_info({terminated, SupPid, ChId}, State=#state{chans=Chans}) ->
-    Chans2 = dict:erase(ChId, Chans),
-    exit(SupPid, kill),  % FIXME: an ugly way to terminate a supervisor
-    {noreply, State#state{chans=Chans2}};
 handle_info(Info, State) ->
     io:fwrite("coap_udp_socket unexpected ~p~n", [Info]),
     {noreply, State}.
@@ -95,21 +65,3 @@ code_change(_OldVsn, State, _Extra) ->
 terminate(_Reason, #state{sock=Sock}) ->
     gen_udp:close(Sock),
     ok.
-
-
-find_channel(ChId, Chans) ->
-    case dict:find(ChId, Chans) of
-        % there is a channel in our cache, but it might have crashed
-        {ok, Pid} ->
-            case erlang:is_process_alive(Pid) of
-                true -> {ok, Pid};
-                false -> undefined
-            end;
-        % we got data via a new channel
-        error -> undefined
-    end.
-
-store_channel(ChId, Pid, State=#state{chans=Chans}) ->
-    State#state{chans=dict:store(ChId, Pid, Chans)}.
-
-% end of file
