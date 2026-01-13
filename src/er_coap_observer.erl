@@ -44,9 +44,8 @@ init([Client, Uri, Options]) ->
     {Scheme, ChId, Path, Query} = er_coap_client:resolve_uri(Uri),
     {ok, Sock, Channel} = case Scheme of
         coap ->
-            {ok, So} = er_coap_udp_socket:start_link(),
-            {ok, Ch} = er_coap_udp_socket:get_channel(So, ChId),
-            {ok, So, Ch};
+            {Host, Port} = ChId,
+            er_coap_udp_socket:connect(Host, Port);
         coaps ->
             {Host, Port} = ChId,
             er_coap_dtls_socket:connect(Host, Port)

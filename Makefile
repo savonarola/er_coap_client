@@ -1,6 +1,6 @@
 # rebar3 logic by Bjorn-Egil Dahlberg
 # https://gist.github.com/psyeugenic/d2d53a15463b218fd20c2fe7fd73ced0
-REBAR3_URL=https://s3.amazonaws.com/rebar3/rebar3
+REBAR3_URL=https://github.com/emqx/rebar3/releases/download/3.25.1-emqx-1/rebar3
 
 ifeq ($(wildcard rebar3),rebar3)
 REBAR3 = $(CURDIR)/rebar3
